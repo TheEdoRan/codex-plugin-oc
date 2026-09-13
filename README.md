@@ -187,7 +187,7 @@ The plugin wraps the [Codex app server](https://developers.openai.com/codex/app-
 
 Each review or task spawns a private `codex app-server` process inside the OpenCode server and closes it when the run finishes, when you cancel it, or when you press Esc.
 
-Background jobs run inside the OpenCode server process. Job records and logs live under `$XDG_DATA_HOME/opencode/codex-plugin` (defaults to `~/.local/share/opencode/codex-plugin`). Set `CODEX_PLUGIN_DATA_DIR` to move them.
+Background jobs run inside the OpenCode server process, so they need that server to stay alive: the TUI, `opencode serve`, or `opencode web`. A one-shot `opencode run` exits when the answer is printed and takes its background jobs with it; the next plugin start marks those jobs as failed. Job records and logs live under `$XDG_DATA_HOME/opencode/codex-plugin` (defaults to `~/.local/share/opencode/codex-plugin`). Set `CODEX_PLUGIN_DATA_DIR` to move them.
 
 Jobs are scoped to the OpenCode session that started them, so `/codex-status` shows the jobs from your current session by default. Pass `--all` or a job id to see others.
 

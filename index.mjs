@@ -42,6 +42,12 @@ function flagsToArgv(flags, positionals = []) {
 export default async function CodexPlugin({ client, directory }) {
   const rootSessionCache = new Map();
 
+  try {
+    commands.sweepOrphanedJobs(directory);
+  } catch {
+    // A broken state file must not stop the plugin from loading.
+  }
+
   // Subagents run in child sessions. Jobs are scoped to the root session so
   // /codex-status in the parent sees what /codex-rescue started.
   async function rootSessionId(sessionID) {

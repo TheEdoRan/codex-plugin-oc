@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import { listJobs } from "../lib/state.mjs";
+import { listJobs, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "../lib/state.mjs";
 import plugin from "../index.mjs";
 
 process.env.CODEX_PLUGIN_DATA_DIR = makeTempDir("codex-plugin-state-");
@@ -179,4 +179,26 @@ test("session.deleted prunes only that session's jobs", async () => {
     assert.equal(remaining.length, 1);
     assert.equal(remaining[0].sessionId, "keep");
   });
+});
+
+test("plugin start marks jobs from a dead host as failed and leaves live ones alone", async () => {
+  const repo = makeRepo();
+  const deadPid = 2 ** 22 - 7;
+  const seed = (id, hostPid) => {
+    const logFile = resolveJobLogFile(repo, id);
+    fs.writeFileSync(logFile, "", "utf8");
+    const job = { id, status: "running", phase: "running", title: "Codex Task", jobClass: "task", hostPid, logFile };
+    writeJobFile(repo, id, job);
+    upsertJob(repo, job);
+  };
+  seed("task-dead", deadPid);
+  seed("task-alive", process.pid);
+
+  await plugin({ client: fakeClient(), directory: repo });
+
+  const byId = Object.fromEntries(listJobs(repo).map((job) => [job.id, job]));
+  assert.equal(byId["task-dead"].status, "failed");
+  assert.match(byId["task-dead"].errorMessage, /OpenCode server exited/);
+  assert.equal(JSON.parse(fs.readFileSync(resolveJobFile(repo, "task-dead"), "utf8")).status, "failed");
+  assert.equal(byId["task-alive"].status, "running");
 });
