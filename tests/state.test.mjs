@@ -1,43 +1,52 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { makeTempDir } from "./helpers.mjs";
+
+process.env.CODEX_PLUGIN_DATA_DIR = makeTempDir("codex-plugin-state-");
 import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../lib/state.mjs";
 
-test("resolveStateDir uses a temp-backed per-workspace directory", () => {
-  const workspace = makeTempDir();
-  const stateDir = resolveStateDir(workspace);
-
-  assert.equal(stateDir.startsWith(os.tmpdir()), true);
-  assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
-  assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-});
-
-test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
-  const workspace = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
-
-  try {
-    const stateDir = resolveStateDir(workspace);
-
-    assert.equal(stateDir.startsWith(path.join(pluginDataDir, "state")), true);
-    assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
-    assert.match(
-      stateDir,
-      new RegExp(`^${path.join(pluginDataDir, "state").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
-    );
-  } finally {
-    if (previousPluginDataDir == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+function withEnv(patch, fn) {
+  const previous = {};
+  for (const [key, value] of Object.entries(patch)) {
+    previous[key] = process.env[key];
+    if (value == null) {
+      delete process.env[key];
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+      process.env[key] = value;
     }
   }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+test("resolveStateDir defaults to the OpenCode data directory", () => {
+  const workspace = makeTempDir();
+  const dataHome = makeTempDir();
+  const stateDir = withEnv({ CODEX_PLUGIN_DATA_DIR: null, XDG_DATA_HOME: dataHome }, () => resolveStateDir(workspace));
+
+  assert.equal(stateDir.startsWith(path.join(dataHome, "opencode", "codex-plugin")), true);
+  assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
+});
+
+test("resolveStateDir honors CODEX_PLUGIN_DATA_DIR", () => {
+  const workspace = makeTempDir();
+  const override = makeTempDir();
+  const stateDir = withEnv({ CODEX_PLUGIN_DATA_DIR: override }, () => resolveStateDir(workspace));
+
+  assert.equal(path.dirname(stateDir), override);
+  assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
 });
 
 test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", () => {
