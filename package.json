@@ -1,6 +1,10 @@
 {
-  "name": "codex-plugin-oc",
-  "version": "1.1.0",
+  "name": "@theedoran/codex-plugin-oc",
+  "version": "0.0.0",
+	"private": false,
+	"publishConfig": {
+		"access": "public"
+	},
   "type": "module",
   "description": "Use Codex from OpenCode to review code or delegate tasks.",
   "license": "Apache-2.0",
