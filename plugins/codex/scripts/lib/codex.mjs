@@ -1,11 +1,4 @@
 /**
- * @typedef {import("./app-server-protocol").AppServerNotification} AppServerNotification
- * @typedef {import("./app-server-protocol").ReviewTarget} ReviewTarget
- * @typedef {import("./app-server-protocol").ThreadItem} ThreadItem
- * @typedef {import("./app-server-protocol").ThreadResumeParams} ThreadResumeParams
- * @typedef {import("./app-server-protocol").ThreadStartParams} ThreadStartParams
- * @typedef {import("./app-server-protocol").Turn} Turn
- * @typedef {import("./app-server-protocol").UserInput} UserInput
  * @typedef {((update: string | { message: string, phase: string | null, threadId?: string | null, turnId?: string | null, stderrMessage?: string | null, logTitle?: string | null, logBody?: string | null }) => void)} ProgressReporter
  * @typedef {{
  *   threadId: string,
@@ -34,22 +27,14 @@
  *   onProgress: ProgressReporter | null
  * }} TurnCaptureState
  */
-import crypto from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
 import { readJsonFile } from "./fs.mjs";
-import { BROKER_BUSY_RPC_CODE, BROKER_ENDPOINT_ENV, CodexAppServerClient } from "./app-server.mjs";
-import { loadBrokerSession } from "./broker-lifecycle.mjs";
+import { CodexAppServerClient } from "./app-server.mjs";
 import { binaryAvailable } from "./process.mjs";
 
-const SERVICE_NAME = "claude_code_codex_plugin";
+const SERVICE_NAME = "opencode_codex_plugin";
 const TASK_THREAD_PREFIX = "Codex Companion Task";
 const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
-const EXTERNAL_AGENT_IMPORT_COMPLETED = "externalAgentConfig/import/completed";
-const EXTERNAL_AGENT_IMPORT_TIMEOUT_MS = 2 * 60 * 1000;
 
 function cleanCodexStderr(stderr) {
   return stderr
@@ -611,121 +596,11 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
 }
 
 async function withAppServer(cwd, fn) {
-  let client = null;
-  try {
-    client = await CodexAppServerClient.connect(cwd);
-    const result = await fn(client);
-    await client.close();
-    return result;
-  } catch (error) {
-    const brokerRequested = client?.transport === "broker" || Boolean(process.env[BROKER_ENDPOINT_ENV]);
-    const shouldRetryDirect =
-      (client?.transport === "broker" && error?.rpcCode === BROKER_BUSY_RPC_CODE) ||
-      (brokerRequested && (error?.code === "ENOENT" || error?.code === "ECONNREFUSED"));
-
-    if (client) {
-      await client.close().catch(() => {});
-      client = null;
-    }
-
-    if (!shouldRetryDirect) {
-      throw error;
-    }
-
-    const directClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
-    try {
-      return await fn(directClient);
-    } finally {
-      await directClient.close();
-    }
-  }
-}
-
-async function withDirectAppServer(cwd, fn) {
-  const client = await CodexAppServerClient.connect(cwd, { disableBroker: true });
+  const client = await CodexAppServerClient.connect(cwd);
   try {
     return await fn(client);
   } finally {
-    await client.close();
-  }
-}
-
-function resolveCodexHome() {
-  return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
-}
-
-function sourceContentSha256(sourcePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(sourcePath)).digest("hex");
-}
-
-function importedThreadIdForSource(sourcePath) {
-  const ledgerPath = path.join(resolveCodexHome(), "external_agent_session_imports.json");
-  if (!fs.existsSync(ledgerPath)) {
-    return null;
-  }
-  const ledger = readJsonFile(ledgerPath);
-  const canonicalSource = fs.realpathSync(sourcePath);
-  const contentSha256 = sourceContentSha256(canonicalSource);
-  const records = Array.isArray(ledger?.records) ? ledger.records : [];
-  const match = records
-    .filter(
-      (record) =>
-        record?.source_path === canonicalSource &&
-        record?.content_sha256 === contentSha256 &&
-        typeof record?.imported_thread_id === "string"
-    )
-    .at(-1);
-  return match?.imported_thread_id ?? null;
-}
-
-function externalAgentSessionMigration(sourcePath, cwd) {
-  return {
-    migrationItems: [
-      {
-        itemType: "SESSIONS",
-        description: `Transfer Claude session ${path.basename(sourcePath)}`,
-        cwd: null,
-        details: {
-          plugins: [],
-          sessions: [{ path: sourcePath, cwd, title: null }],
-          mcpServers: [],
-          hooks: [],
-          subagents: [],
-          commands: []
-        }
-      }
-    ]
-  };
-}
-
-async function requestExternalAgentSessionImport(client, params) {
-  const previousHandler = client.notificationHandler;
-  let timeout = null;
-  let resolveCompleted;
-  let rejectCompleted;
-  const completed = new Promise((resolve, reject) => {
-    resolveCompleted = resolve;
-    rejectCompleted = reject;
-  });
-  void completed.catch(() => {});
-
-  client.setNotificationHandler((message) => {
-    if (message.method === EXTERNAL_AGENT_IMPORT_COMPLETED) {
-      resolveCompleted();
-      return;
-    }
-    previousHandler?.(message);
-  });
-  timeout = setTimeout(() => {
-    rejectCompleted(new Error("Timed out waiting for Codex to finish importing the Claude session."));
-  }, EXTERNAL_AGENT_IMPORT_TIMEOUT_MS);
-
-  try {
-    await client.request("externalAgentConfig/import", params);
-    await completed;
-  } finally {
-    clearTimeout(timeout);
-    client.setNotificationHandler(previousHandler ?? null);
+    await client.close().catch(() => {});
   }
 }
 
@@ -903,25 +778,6 @@ export function getCodexAvailability(cwd) {
   };
 }
 
-export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) {
-  const endpoint = env?.[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(cwd)?.endpoint ?? null;
-  if (endpoint) {
-    return {
-      mode: "shared",
-      label: "shared session",
-      detail: "This Claude session is configured to reuse one shared Codex runtime.",
-      endpoint
-    };
-  }
-
-  return {
-    mode: "direct",
-    label: "direct startup",
-    detail: "No shared Codex runtime is active yet. The first review or task command will start one on demand.",
-    endpoint: null
-  };
-}
-
 export async function getCodexAuthStatus(cwd, options = {}) {
   const availability = getCodexAvailability(cwd);
   if (!availability.available) {
@@ -939,10 +795,7 @@ export async function getCodexAuthStatus(cwd, options = {}) {
 
   let client = null;
   try {
-    client = await CodexAppServerClient.connect(cwd, {
-      env: options.env,
-      reuseExistingBroker: true
-    });
+    client = await CodexAppServerClient.connect(cwd, { env: options.env });
     return await getCodexAuthStatusFromClient(client, cwd);
   } catch (error) {
     return buildAuthStatus({
@@ -954,48 +807,6 @@ export async function getCodexAuthStatus(cwd, options = {}) {
     if (client) {
       await client.close().catch(() => {});
     }
-  }
-}
-
-export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
-  if (!threadId || !turnId) {
-    return {
-      attempted: false,
-      interrupted: false,
-      transport: null,
-      detail: "missing threadId or turnId"
-    };
-  }
-
-  const availability = getCodexAvailability(cwd);
-  if (!availability.available) {
-    return {
-      attempted: false,
-      interrupted: false,
-      transport: null,
-      detail: availability.detail
-    };
-  }
-
-  let client = null;
-  try {
-    client = await CodexAppServerClient.connect(cwd, { reuseExistingBroker: true });
-    await client.request("turn/interrupt", { threadId, turnId });
-    return {
-      attempted: true,
-      interrupted: true,
-      transport: client.transport,
-      detail: `Interrupted ${turnId} on ${threadId}.`
-    };
-  } catch (error) {
-    return {
-      attempted: true,
-      interrupted: false,
-      transport: client?.transport ?? null,
-      detail: error instanceof Error ? error.message : String(error)
-    };
-  } finally {
-    await client?.close().catch(() => {});
   }
 }
 
@@ -1050,43 +861,6 @@ export async function runAppServerReview(cwd, options = {}) {
       reasoningSummary: turnState.reasoningSummary,
       turn: turnState.finalTurn,
       error: turnState.error,
-      stderr: cleanCodexStderr(client.stderr)
-    };
-  });
-}
-
-export async function importExternalAgentSession(cwd, options = {}) {
-  const availability = getCodexAvailability(cwd);
-  if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
-  }
-  if (!options.sourcePath) {
-    throw new Error("A Claude session source path is required.");
-  }
-
-  return withDirectAppServer(cwd, async (client) => {
-    emitProgress(options.onProgress, "Importing Claude session into Codex.", "transferring");
-    try {
-      await requestExternalAgentSessionImport(client, externalAgentSessionMigration(options.sourcePath, cwd));
-    } catch (error) {
-      if (error?.rpcCode === -32601) {
-        throw new Error(
-          "This Codex version does not support Claude session transfer. Update Codex with `npm install -g @openai/codex@latest`, then retry.",
-          { cause: error }
-        );
-      }
-      throw error;
-    }
-    const threadId = importedThreadIdForSource(options.sourcePath);
-    if (!threadId) {
-      const stderr = cleanCodexStderr(client.stderr);
-      throw new Error(
-        `Codex reported that the Claude import completed, but did not record an imported thread.${stderr ? `\n${stderr}` : " Check the Codex app-server logs for the underlying import error."}`
-      );
-    }
-    emitProgress(options.onProgress, `Claude session imported (${threadId}).`, "completed", { threadId });
-    return {
-      threadId,
       stderr: cleanCodexStderr(client.stderr)
     };
   });

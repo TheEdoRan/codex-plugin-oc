@@ -1,7 +1,6 @@
 import fs from "node:fs";
 
-import { getSessionRuntimeStatus } from "./codex.mjs";
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { listJobs, readJobFile, resolveJobFile } from "./state.mjs";
 import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
@@ -212,7 +211,6 @@ function matchJobReference(jobs, reference, predicate = () => true) {
 
 export function buildStatusSnapshot(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const config = getConfig(workspaceRoot);
   const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), options));
   const maxJobs = options.maxJobs ?? DEFAULT_MAX_STATUS_JOBS;
   const maxProgressLines = options.maxProgressLines ?? DEFAULT_MAX_PROGRESS_LINES;
@@ -230,12 +228,9 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
   return {
     workspaceRoot,
-    config,
-    sessionRuntime: getSessionRuntimeStatus(options.env, workspaceRoot),
     running,
     latestFinished,
-    recent,
-    needsReview: Boolean(config.stopReviewGate)
+    recent
   };
 }
 

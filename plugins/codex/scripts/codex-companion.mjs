@@ -13,27 +13,16 @@ import {
     findLatestTaskThread,
     getCodexAuthStatus,
     getCodexAvailability,
-    getSessionRuntimeStatus,
-    importExternalAgentSession,
-    interruptAppServerTurn,
     parseStructuredOutput,
     readOutputSchema,
     runAppServerReview,
     runAppServerTurn
   } from "./lib/codex.mjs";
-import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
-import {
-  generateJobId,
-  getConfig,
-  listJobs,
-  setConfig,
-  upsertJob,
-  writeJobFile
-} from "./lib/state.mjs";
+import { generateJobId, listJobs, upsertJob, writeJobFile } from "./lib/state.mjs";
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
@@ -70,17 +59,15 @@ const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
-const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
 function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
+      "  node scripts/codex-companion.mjs setup [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
-      "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
@@ -185,7 +172,6 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
   const codexStatus = getCodexAvailability(cwd);
   const authStatus = await getCodexAuthStatus(cwd);
-  const config = getConfig(workspaceRoot);
 
   const nextSteps = [];
   if (!codexStatus.available) {
@@ -195,9 +181,6 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     nextSteps.push("Run `!codex login`.");
     nextSteps.push("If browser login is blocked, retry with `!codex login --device-auth` or `!codex login --with-api-key`.");
   }
-  if (!config.stopReviewGate) {
-    nextSteps.push("Optional: run `/codex:setup --enable-review-gate` to require a fresh review before stop.");
-  }
 
   return {
     ready: nodeStatus.available && codexStatus.available && authStatus.loggedIn,
@@ -205,8 +188,6 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     npm: npmStatus,
     codex: codexStatus,
     auth: authStatus,
-    sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
-    reviewGateEnabled: Boolean(config.stopReviewGate),
     actionsTaken,
     nextSteps
   };
@@ -215,26 +196,11 @@ async function buildSetupReport(cwd, actionsTaken = []) {
 async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
-    booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
+    booleanOptions: ["json"]
   });
 
-  if (options["enable-review-gate"] && options["disable-review-gate"]) {
-    throw new Error("Choose either --enable-review-gate or --disable-review-gate.");
-  }
-
   const cwd = resolveCommandCwd(options);
-  const workspaceRoot = resolveCommandWorkspace(options);
-  const actionsTaken = [];
-
-  if (options["enable-review-gate"]) {
-    setConfig(workspaceRoot, "stopReviewGate", true);
-    actionsTaken.push(`Enabled the stop-time review gate for ${workspaceRoot}.`);
-  } else if (options["disable-review-gate"]) {
-    setConfig(workspaceRoot, "stopReviewGate", false);
-    actionsTaken.push(`Disabled the stop-time review gate for ${workspaceRoot}.`);
-  }
-
-  const finalReport = await buildSetupReport(cwd, actionsTaken);
+  const finalReport = await buildSetupReport(cwd, []);
   outputResult(options.json ? finalReport : renderSetupReport(finalReport), options.json);
 }
 
@@ -538,13 +504,6 @@ function buildReviewJobMetadata(reviewName, target) {
 }
 
 function buildTaskRunMetadata({ prompt, resumeLast = false }) {
-  if (!resumeLast && String(prompt ?? "").includes(STOP_REVIEW_TASK_MARKER)) {
-    return {
-      title: "Codex Stop Gate Review",
-      summary: "Stop-gate review of previous Claude turn"
-    };
-  }
-
   const title = resumeLast ? "Codex Resume" : "Codex Task";
   const fallbackSummary = resumeLast ? DEFAULT_CONTINUE_PROMPT : "Task";
   return {
@@ -610,33 +569,6 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     write,
     resumeLast,
     jobId
-  };
-}
-
-function renderTransferResult(payload) {
-  const lines = [
-    "Transferred the Claude session into a Codex thread with visible turn history.",
-    `Codex session ID: ${payload.threadId}`,
-    `Resume in Codex: ${payload.resumeCommand}`
-  ];
-  return `${lines.join("\n")}\n`;
-}
-
-async function executeTransfer(cwd, options = {}) {
-  const sourcePath = resolveClaudeSessionPath(cwd, {
-    source: options.source
-  });
-  const result = await importExternalAgentSession(cwd, { sourcePath });
-  const payload = {
-    threadId: result.threadId,
-    resumeCommand: `codex resume ${result.threadId}`,
-    sourcePath,
-    sessionId: path.basename(sourcePath, ".jsonl")
-  };
-
-  return {
-    payload,
-    rendered: renderTransferResult(payload)
   };
 }
 
@@ -822,19 +754,6 @@ async function handleTask(argv) {
   );
 }
 
-async function handleTransfer(argv) {
-  const { options } = parseCommandInput(argv, {
-    valueOptions: ["cwd", "source"],
-    booleanOptions: ["json"]
-  });
-
-  const cwd = resolveCommandCwd(options);
-  const { payload, rendered } = await executeTransfer(cwd, {
-    source: options.source
-  });
-  outputCommandResult(payload, rendered, options.json);
-}
-
 async function handleTaskWorker(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd", "job-id"]
@@ -970,18 +889,6 @@ async function handleCancel(argv) {
   const reference = positionals[0] ?? "";
   const { workspaceRoot, job } = resolveCancelableJob(cwd, reference, { env: process.env });
   const existing = readStoredJob(workspaceRoot, job.id) ?? {};
-  const threadId = existing.threadId ?? job.threadId ?? null;
-  const turnId = existing.turnId ?? job.turnId ?? null;
-
-  const interrupt = await interruptAppServerTurn(cwd, { threadId, turnId });
-  if (interrupt.attempted) {
-    appendLogLine(
-      job.logFile,
-      interrupt.interrupted
-        ? `Requested Codex turn interrupt for ${turnId} on ${threadId}.`
-        : `Codex turn interrupt failed${interrupt.detail ? `: ${interrupt.detail}` : "."}`
-    );
-  }
 
   terminateProcessTree(job.pid ?? Number.NaN);
   appendLogLine(job.logFile, "Cancelled by user.");
@@ -1013,9 +920,7 @@ async function handleCancel(argv) {
   const payload = {
     jobId: job.id,
     status: "cancelled",
-    title: job.title,
-    turnInterruptAttempted: interrupt.attempted,
-    turnInterrupted: interrupt.interrupted
+    title: job.title
   };
 
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);
@@ -1042,9 +947,6 @@ async function main() {
       break;
     case "task":
       await handleTask(argv);
-      break;
-    case "transfer":
-      await handleTransfer(argv);
       break;
     case "task-worker":
       await handleTaskWorker(argv);
