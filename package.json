@@ -1,6 +1,6 @@
 {
 	"name": "@theedoran/codex-plugin-oc",
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"description": "Use Codex from OpenCode to review code or delegate tasks.",
 	"author": "Edoardo Ranghieri",
 	"license": "Apache-2.0",
