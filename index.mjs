@@ -2,7 +2,7 @@
 // subagent, the gpt-5-4-prompting skill, and the codex_* tools that drive the
 // Codex app-server runtime in lib/.
 //
-// Add it to opencode.json: { "plugin": ["codex-plugin-oc"] }
+// Add it to opencode.json: { "plugin": ["@theedoran/codex-plugin-oc"] }
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

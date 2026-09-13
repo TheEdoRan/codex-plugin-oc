@@ -12,6 +12,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-This fork (codex-plugin-oc) was modified by Edoardo Ranghieri in 2026 to
+This fork (@theedoran/codex-plugin-oc) was modified by Edoardo Ranghieri in 2026 to
 target OpenCode instead of Claude Code. The original work is
 https://github.com/openai/codex-plugin-cc.

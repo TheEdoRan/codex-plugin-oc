@@ -2,7 +2,7 @@
 
 Use Codex from inside [OpenCode](https://opencode.ai) for code reviews or to delegate tasks to Codex.
 
-This is a port of OpenAI's [Codex plugin for Claude Code](https://github.com/openai/codex-plugin-cc) to OpenCode. It keeps the same Codex runtime (the `codex app-server` JSON-RPC driver) and exposes it through OpenCode commands, tools, and a subagent, so it works with every model you run in OpenCode.
+`@theedoran/codex-plugin-oc` is a fork of OpenAI's [Codex plugin for Claude Code](https://github.com/openai/codex-plugin-cc), ported to OpenCode. The Codex runtime (the `codex app-server` JSON-RPC driver, the review and task prompts, the job tracking) is the original OpenAI work. This fork replaces the Claude Code integration layer with an OpenCode one: the commands become OpenCode commands, the Codex handlers are exposed as `codex_*` tools that any model can call, background jobs run inside the OpenCode server, and a `codex-rescue` subagent is added. It is not affiliated with OpenAI.
 
 ## What You Get
 
@@ -25,7 +25,7 @@ This is a port of OpenAI's [Codex plugin for Claude Code](https://github.com/ope
 From npm:
 
 ```bash
-opencode plugin codex-plugin-oc
+opencode plugin @theedoran/codex-plugin-oc
 ```
 
 Or add it to your `opencode.json` by hand:
@@ -33,7 +33,7 @@ Or add it to your `opencode.json` by hand:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["codex-plugin-oc"]
+  "plugin": ["@theedoran/codex-plugin-oc"]
 }
 ```
 
@@ -215,9 +215,11 @@ Delegated tasks can be resumed inside Codex by running `codex resume` with the s
 ## Development
 
 ```bash
-npm install
-npm test
+pnpm install
+pnpm test
 ```
+
+Releases use [Changesets](https://github.com/changesets/changesets). Add a changeset with `pnpm changeset` and push to `main`. The release workflow opens a version PR; merging that PR publishes to npm through trusted publishing.
 
 `cli.mjs` exposes the same handlers the tools use, for local debugging:
 
@@ -245,6 +247,6 @@ Yes. Because the plugin uses your local Codex CLI, your existing sign-in method 
 
 ## Credits and License
 
-Originally written by OpenAI as [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) for Claude Code. Ported to OpenCode by Edoardo Ranghieri.
+This is a fork. The plugin was originally written by the OpenAI Codex team as [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) for Claude Code, and the Codex runtime here is their work. Edoardo Ranghieri ported it to OpenCode and maintains this fork as [`@theedoran/codex-plugin-oc`](https://www.npmjs.com/package/@theedoran/codex-plugin-oc).
 
 Licensed under the Apache License 2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
